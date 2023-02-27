@@ -253,7 +253,7 @@ class Snake {
 
         this.lastSnakeUpdate += 1;
 
-        if (this.lastSnakeUpdate < 10) {
+        if (this.lastSnakeUpdate < 5) {
             return;
         }
 

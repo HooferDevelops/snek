@@ -253,7 +253,7 @@ class Snake {
 
         this.lastSnakeUpdate += 1;
 
-        if (this.lastSnakeUpdate < 5) {
+        if (this.lastSnakeUpdate < 0) {
             return;
         }
 
@@ -334,7 +334,151 @@ class Snake {
     }
 }
 
+class NeuralNetwork {
+    constructor(snake) {
+        this.snake = snake;
+
+        this.brainConfig = {
+            binaryThresh: 0.5,
+            hiddenLayers: [3], // array of ints for the sizes of the hidden layers in the network
+            activation: "sigmoid", // supported activation types: ['sigmoid', 'relu', 'leaky-relu', 'tanh'],
+            leakyReluAlpha: 0.01, // supported for activation type 'leaky-relu'
+        }
+
+        this.net = new brain.NeuralNetwork(this.brainConfig);
+
+        this.trainedData = [];
+        
+        this.randomTraining = true;
+    }
+
+    hookToGame() {
+        let oldSnakeUpdate = this.snake.updateSnake
+        let _this = this;
+
+        function newSnakeUpdate() {
+            _this.trainSnake();
+            oldSnakeUpdate.call(_this.snake);
+        }
+
+        this.snake.updateSnake = newSnakeUpdate;
+    }
+
+    getSnakeBlockage() {
+        let head = this.snake.snakeCells[0];
+
+        let results = {
+            "top": false,
+            "bottom": false,
+            "left": false,
+            "right": false
+        }
+
+        for (let i = 1; i < this.snake.snakeCells.length; i++) {
+            let cell = this.snake.snakeCells[i];
+
+            if (cell.y == head.y + 1 && cell.x == head.x) {
+                results.bottom = true;
+            }
+
+            if (cell.y == head.y - 1 && cell.x == head.x) {
+                results.top = true;
+            }
+
+            if (cell.x == head.x + 1 && cell.y == head.y) {
+                results.right = true;
+            }
+
+            if (cell.x == head.x - 1 && cell.y == head.y) {
+                results.left = true;
+            }
+        }
+
+        let resultsArray = [results["top"] ? 1 : 0, results["bottom"] ? 1 : 0, results["left"] ? 1 : 0, results["right"] ? 1 : 0];
+
+        return resultsArray;
+    }
+
+    trainSnake() {
+        if (this.lastData) {
+            this.trainedData.push(this.lastData);
+            this.lastData = null;
+        }
+
+        if (this.randomTraining) {
+            let blockage = this.getSnakeBlockage();
+            
+            let direction = Math.floor(Math.random() * 3) / 2
+
+            if (direction === 0) {
+                let oldX = this.snake.xDir;
+                this.snake.xDir = this.snake.yDir;
+                this.snake.yDir = oldX;
+            } else if (direction === 1) {
+                let oldX = this.snake.xDir;
+                this.snake.xDir = -this.snake.yDir;
+                this.snake.yDir = -oldX;
+            } else {
+
+            }
+
+            // Check if we are going to hit the edge
+            let head = this.snake.snakeCells[0];
+
+            if (head.x + this.snake.xDir < 0 || head.x + this.snake.xDir >= this.snake.gridCount) {
+                console.log("Hit edge");
+                this.snake.gameOver = 1;
+                return;
+            } else if (head.y + this.snake.yDir < 0 || head.y + this.snake.yDir >= this.snake.gridCount) {
+                console.log("Hit edge");
+                this.snake.gameOver = 1;
+                return;
+            }
+
+            this.lastData = { input: blockage, output: [direction] }
+        } else {
+            let blockage = this.getSnakeBlockage();
+            let output = this.net.run(blockage);
+
+            // Get closest direction to 0, 0.5, 1 from output
+            let direction = Math.round(output[0] * 2 ) / 2;
+
+            if (direction === 0) {
+                let oldX = this.snake.xDir;
+                this.snake.xDir = this.snake.yDir;
+                this.snake.yDir = oldX;
+            } else if (direction === 1) {
+                let oldX = this.snake.xDir;
+                this.snake.xDir = -this.snake.yDir;
+                this.snake.yDir = -oldX;
+            }
+        }
+    }
+
+    ready() {
+        setInterval(() => {
+            if (this.snake.gameOver > 0) {
+                this.lastData = null;
+                this.snake.gameOver = 0;
+                this.snake.resetSnake();
+            }
+        }, 1);
+
+        setTimeout(() => {
+            console.log("Random Training Complete");
+            this.net.train(this.trainedData);
+            this.randomTraining = false;
+        }, 60000);
+
+        //const output = this.net.run([1, 0]);
+        //console.log(output);
+        this.hookToGame();
+    }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     const snake = new Snake();
+    const neural = new NeuralNetwork(snake);
     snake.ready();
+    neural.ready();
 });

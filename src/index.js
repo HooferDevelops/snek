@@ -105,10 +105,12 @@ class Snake {
         this.snakeCells = [];
         this.xDir = 1;
         this.yDir = 0;
-        this.snakeLength = 3;
+        this.snakeLength = 8;
 
         this.lastSnakeUpdate = 0;
         this.lastDropUpdate = 100; // Start with a drop
+
+        this.updateLoopRate = 1;
         
         /* Event Listeners */
         document.addEventListener("keydown", (e) => {
@@ -224,8 +226,10 @@ class Snake {
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         this.draw();
-        this.updateSnake();
-        this.updateDrop();
+        for (var i = 0; i < this.updateLoopRate; i++) {
+            this.updateSnake();
+            this.updateDrop();
+        }
         
         this.lastFpsUpdate += 1;
         if (this.lastFpsUpdate >= 10) {
@@ -241,8 +245,13 @@ class Snake {
         this.dropCells = [];
         this.snakeCells = [];
         this.snakeCells.push(new SnakeCell(Math.floor(this.gridCount / 2), Math.floor(this.gridCount / 2)));
-        this.snakeLength = 3;
+        this.snakeLength = Math.floor(Math.random() * 5) + 3;
         this.isRainbow = -1;
+    }
+
+    // Attaching Trainer
+    snakeTrain() {
+
     }
 
     // Snake Movement
@@ -253,7 +262,7 @@ class Snake {
 
         this.lastSnakeUpdate += 1;
 
-        if (this.lastSnakeUpdate < 0) {
+        if (this.lastSnakeUpdate < 10) {
             return;
         }
 
@@ -264,6 +273,8 @@ class Snake {
         if (!head) {
             return;
         }
+
+        this.snakeTrain();
         
         let newX = head.x + this.xDir;
         let newY = head.y + this.yDir;
@@ -338,22 +349,43 @@ class NeuralNetwork {
     constructor(snake) {
         this.snake = snake;
 
-        this.brainConfig = {
-            binaryThresh: 0.5,
-            hiddenLayers: [3], // array of ints for the sizes of the hidden layers in the network
-            activation: "sigmoid", // supported activation types: ['sigmoid', 'relu', 'leaky-relu', 'tanh'],
-            leakyReluAlpha: 0.01, // supported for activation type 'leaky-relu'
-        }
+        let inputLayer = new window.synaptic.Layer(5);
+        let hiddenLayer = new window.synaptic.Layer(20);
+        let outputLayer = new window.synaptic.Layer(1);
 
-        this.net = new brain.NeuralNetwork(this.brainConfig);
+        inputLayer.project(hiddenLayer);
+        hiddenLayer.project(outputLayer);
+
+        this.net = new window.synaptic.Network({
+            input: inputLayer,
+            hidden: [hiddenLayer],
+            output: outputLayer
+        });
 
         this.trainedData = [];
         
         this.randomTraining = true;
+        this.appleTraining = false;
+    }
+
+    fetchTrainingData() {
+        return new Promise((resolve, reject) => {
+            fetch("data/SnakeNN1.json")
+                .then((response) => {
+                    return response.json();
+                })
+                .then((data) => {
+                    this.trainedData = data;
+                    resolve();
+                })
+                .catch((err) => {
+                    reject(err);
+                });
+        });
     }
 
     hookToGame() {
-        let oldSnakeUpdate = this.snake.updateSnake
+        let oldSnakeUpdate = this.snake.snakeTrain
         let _this = this;
 
         function newSnakeUpdate() {
@@ -361,48 +393,50 @@ class NeuralNetwork {
             oldSnakeUpdate.call(_this.snake);
         }
 
-        this.snake.updateSnake = newSnakeUpdate;
+        this.snake.snakeTrain = newSnakeUpdate;
     }
 
     getSnakeBlockage() {
         let head = this.snake.snakeCells[0];
 
         let results = {
-            "top": false,
-            "bottom": false,
+            "front": false,
             "left": false,
-            "right": false
+            "right": false,
         }
 
         for (let i = 1; i < this.snake.snakeCells.length; i++) {
             let cell = this.snake.snakeCells[i];
 
-            if (cell.y == head.y + 1 && cell.x == head.x) {
-                results.bottom = true;
+            if (cell.x === head.x - 1 && cell.y === head.y) {
+                results["left"] = true;
+            }
+            
+            if (cell.x === head.x + 1 && cell.y === head.y) {
+                results["right"] = true;
             }
 
-            if (cell.y == head.y - 1 && cell.x == head.x) {
-                results.top = true;
+            if (cell.x === head.x && cell.y === head.y - 1) {
+                results["front"] = true;
             }
 
-            if (cell.x == head.x + 1 && cell.y == head.y) {
-                results.right = true;
-            }
+            
 
-            if (cell.x == head.x - 1 && cell.y == head.y) {
-                results.left = true;
+            if (results["front"] && results["left"] && results["right"]) {
+                break;
             }
         }
 
-        let resultsArray = [results["top"] ? 1 : 0, results["bottom"] ? 1 : 0, results["left"] ? 1 : 0, results["right"] ? 1 : 0];
+        let resultsArray = [results["front"] ? 1 : 0, results["left"] ? 1 : 0, results["right"] ? 1 : 0];
 
         return resultsArray;
     }
 
     trainSnake() {
-        if (this.lastData) {
-            this.trainedData.push(this.lastData);
-            this.lastData = null;
+        if (!this.randomTraining) {
+            this.snake.updateLoopRate = 1;
+        } else {
+            this.snake.updateLoopRate = 100000;
         }
 
         if (this.randomTraining) {
@@ -425,6 +459,10 @@ class NeuralNetwork {
             // Check if we are going to hit the edge
             let head = this.snake.snakeCells[0];
 
+            if (!head) {
+                return;
+            }
+
             if (head.x + this.snake.xDir < 0 || head.x + this.snake.xDir >= this.snake.gridCount) {
                 console.log("Hit edge");
                 this.snake.gameOver = 1;
@@ -435,27 +473,152 @@ class NeuralNetwork {
                 return;
             }
 
-            this.lastData = { input: blockage, output: [direction] }
+            blockage.push(this.snake.snakeLength / (16 * 16));
+
+            let apple = this.snake.dropCells[0];
+
+            if (!apple) {
+                apple = {
+                    x: 0,
+                    y: 0
+                }
+            }
+
+            // Get angle towards apple, from the front of the snake
+            let appleAngle = Math.atan2(apple.y - this.snake.snakeCells[0].y, apple.x - this.snake.snakeCells[0].x);
+
+            let snakeAngle = Math.atan2(this.snake.yDir, this.snake.xDir);
+
+            // Subtract the snake angle from the apple angle
+            appleAngle -= snakeAngle;
+
+            // Convert the angle to a 0-1 value
+            appleAngle = (appleAngle + Math.PI) / (Math.PI * 2);
+
+            let appleDistance = Math.sqrt(Math.pow(apple.x - this.snake.snakeCells[0].x, 2) + Math.pow(apple.y - this.snake.snakeCells[0].y, 2));
+
+            blockage.push(appleAngle);
+
+            this.net.activate(blockage);
+            this.net.propagate(0.3, [direction]);
         } else {
+            let apple = this.snake.dropCells[0];
+
+            if (!apple) {
+                apple = {
+                    x: 0,
+                    y: 0
+                }
+            }
+
+            // Get angle towards apple, from the front of the snake
+            let appleAngle = Math.atan2(apple.y - this.snake.snakeCells[0].y, apple.x - this.snake.snakeCells[0].x);
+
+            let snakeAngle = Math.atan2(this.snake.yDir, this.snake.xDir);
+
+            // Subtract the snake angle from the apple angle
+            appleAngle -= snakeAngle;
+
+            // Convert the angle to a 0-1 value
+            appleAngle = (appleAngle + Math.PI) / (Math.PI * 2);
+
+            let appleDistance = Math.sqrt(Math.pow(apple.x - this.snake.snakeCells[0].x, 2) + Math.pow(apple.y - this.snake.snakeCells[0].y, 2));
+
             let blockage = this.getSnakeBlockage();
-            let output = this.net.run(blockage);
+            blockage.push(this.snake.snakeLength / (16 * 16));
+            blockage.push(appleAngle);
+            let output = this.net.activate(blockage);
+
+            console.log(output);
 
             // Get closest direction to 0, 0.5, 1 from output
             let direction = Math.round(output[0] * 2 ) / 2;
 
+            console.log(direction);
+
+            console.log(this.snake.xDir, this.snake.yDir);
+
+            // If the direction is 0, turn the snake left
             if (direction === 0) {
+                if (this.snake.xDir === 0 && this.snake.yDir === 0) {
+                    this.snake.xDir = -1;
+                    return;
+                }
+                console.log("LEFT");
                 let oldX = this.snake.xDir;
                 this.snake.xDir = this.snake.yDir;
                 this.snake.yDir = oldX;
             } else if (direction === 1) {
+                if (this.snake.xDir === 0 && this.snake.yDir === 0) {
+                    this.snake.xDir = 1;
+                    return;
+                }
+
+                console.log("RIGHT");
                 let oldX = this.snake.xDir;
                 this.snake.xDir = -this.snake.yDir;
                 this.snake.yDir = -oldX;
+            } else {
+                console.log("FORWARD");
+                // Straight
+            }
+
+            
+            
+            if (this.appleTraining) {  
+                if (this.snake.dropCells[0]) {
+                    if (this.lastData) {
+                        console.log(appleDistance, this.lastData.lastAppleDistance)
+                        if (appleDistance > this.lastData.lastAppleDistance) {
+                            console.log("Apple got further away");
+                            this.snake.gameOver = 1;
+                            return;
+                        }
+        
+                        this.lastData.blockage.push(this.lastData.lastAppleDistance);
+                        this.net.activate(this.lastData.blockage);
+                        this.net.propagate(0.3, [this.lastData.direction]);
+
+                        this.lastData = null;
+                    }
+                    
+                    this.lastData = {
+                        blockage: blockage,
+                        direction: direction,
+                        lastAppleDistance: appleDistance
+                    }
+                }
+
+                this.snake.updateLoopRate = 100000;
+            } else {
+                this.snake.updateLoopRate = 1;
             }
         }
     }
 
     ready() {
+        if (!this.randomTraining) {
+            this.fetchTrainingData().then(() => {
+                this.net = new window.synaptic.Network.fromJSON(this.trainedData);;
+            });
+
+            if (this.appleTraining) {
+                setTimeout(() => {
+                    this.appleTraining = false;
+                }, 6000);
+            }
+        } else {
+            setTimeout(() => {
+                console.log("Random Training Complete");
+                this.randomTraining = false;
+                this.appleTraining = true;
+
+                setTimeout(() => {
+                    this.appleTraining = false;
+                }, 300000);
+            }, 300000);
+        }
+
         setInterval(() => {
             if (this.snake.gameOver > 0) {
                 this.lastData = null;
@@ -464,14 +627,6 @@ class NeuralNetwork {
             }
         }, 1);
 
-        setTimeout(() => {
-            console.log("Random Training Complete");
-            this.net.train(this.trainedData);
-            this.randomTraining = false;
-        }, 60000);
-
-        //const output = this.net.run([1, 0]);
-        //console.log(output);
         this.hookToGame();
     }
 }
@@ -481,4 +636,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const neural = new NeuralNetwork(snake);
     snake.ready();
     neural.ready();
+
+    window.snake = snake;
+    window.neural = neural;
 });
